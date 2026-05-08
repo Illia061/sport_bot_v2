@@ -1,0 +1,18 @@
+[build]
+builder = "nixpacks"
+
+[build.nixpacksPlan.phases.setup]
+nixPkgs = ["chromium", "nss", "nspr", "atk", "cups", "dbus", "expat",
+           "libdrm", "libX11", "libXcomposite", "libXdamage", "libXext",
+           "libXfixes", "libXrandr", "libgbm", "libxcb", "libxkbcommon",
+           "mesa", "pango", "alsa-lib"]
+
+[build.nixpacksPlan.phases.install]
+cmds = [
+  "pip install -r requirements.txt",
+  "playwright install chromium"
+]
+
+[deploy]
+startCommand = "python scheduler.py"
+restartPolicyType = "always"
