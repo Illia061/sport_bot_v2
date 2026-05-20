@@ -28,13 +28,20 @@ from telegram import Bot
 from telegram.constants import ParseMode
 
 # ─── CONFIG (all values come from Railway environment variables) ─────────────
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]   # Railway variable
-TELEGRAM_CHANNEL   = os.environ["TELEGRAM_CHANNEL"]     # e.g. "@mychannel" or "-100xxxxxxx"
-GROQ_API_KEY       = os.environ["GROQ_API_KEY"]         # starts with gsk_...
+# Variables are read lazily inside run_pipeline() — NOT at module level.
+# This prevents KeyError crashes when Railway imports the module before
+# injecting the environment variables.
+def _env(key: str) -> str:
+    val = os.environ.get(key, "")
+    if not val:
+        raise EnvironmentError(
+            f"Required environment variable '{key}' is not set.\n"
+            "Go to Railway → your service → Variables and add it."
+        )
+    return val
 
-# Path that persists on Railway volume (or falls back to /tmp for ephemeral runs)
-_data_dir = Path(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "/tmp"))
-DB_PATH   = _data_dir / "published.db"
+# DB path — resolved lazily in init_db()
+DB_PATH: Path | None = None
 
 LOG_LEVEL = logging.INFO
 
@@ -55,18 +62,15 @@ log = logging.getLogger("football-agent")
 # ─── STARTUP CHECK ──────────────────────────────────────────────────────────
 def check_env() -> None:
     """Fail fast with a clear message if any required variable is missing."""
-    required = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL", "GROQ_API_KEY"]
-    missing  = [v for v in required if not os.environ.get(v)]
-    if missing:
-        raise EnvironmentError(
-            f"Missing required environment variables: {', '.join(missing)}\n"
-            "Set them in Railway → your service → Variables."
-        )
+    for key in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL", "GROQ_API_KEY"]:
+        _env(key)  # raises EnvironmentError if missing
 
 # ─── DATABASE ───────────────────────────────────────────────────────────────
 def init_db() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    data_dir = Path(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "/tmp"))
+    db_path  = data_dir / "published.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
     conn.execute(
         """CREATE TABLE IF NOT EXISTS published (
             url_hash  TEXT PRIMARY KEY,
@@ -76,7 +80,7 @@ def init_db() -> sqlite3.Connection:
         )"""
     )
     conn.commit()
-    log.info("DB at %s", DB_PATH)
+    log.info("DB at %s", db_path)
     return conn
 
 
@@ -124,7 +128,7 @@ def get_groq_client() -> OpenAI:
     global _groq_client
     if _groq_client is None:
         _groq_client = OpenAI(
-            api_key=GROQ_API_KEY,
+            api_key=_env("GROQ_API_KEY"),
             base_url="https://api.groq.com/openai/v1",
         )
     return _groq_client
@@ -343,7 +347,7 @@ async def fetch_onefootball_article(url: str) -> tuple[str, str | None]:
         return "", None
 
 # ─── TELEGRAM POSTING ───────────────────────────────────────────────────────
-async def post_to_telegram(bot: Bot, article: dict) -> None:
+async def post_to_telegram(bot: Bot, article: dict, channel: str) -> None:
     title   = article["title"]
     url     = article["url"]
     summary = article.get("summary") or article.get("description") or ""
@@ -367,14 +371,14 @@ async def post_to_telegram(bot: Bot, article: dict) -> None:
     try:
         if img_bytes:
             await bot.send_photo(
-                chat_id=TELEGRAM_CHANNEL,
+                chat_id=channel,
                 photo=img_bytes,
                 caption=caption,
                 parse_mode=ParseMode.HTML,
             )
         else:
             await bot.send_message(
-                chat_id=TELEGRAM_CHANNEL,
+                chat_id=channel,
                 text=caption,
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=False,
@@ -387,7 +391,8 @@ async def post_to_telegram(bot: Bot, article: dict) -> None:
 async def run_pipeline() -> None:
     check_env()
     conn = init_db()
-    bot  = Bot(token=TELEGRAM_BOT_TOKEN)
+    bot  = Bot(token=_env("TELEGRAM_BOT_TOKEN"))
+    channel = _env("TELEGRAM_CHANNEL")
 
     # ── 1. Football.ua ──────────────────────────────────────────────────────
     fu_articles = fetch_football_ua()
@@ -401,7 +406,7 @@ async def run_pipeline() -> None:
             body or article["description"],
             translate_to_uk=False,
         )
-        await post_to_telegram(bot, article)
+        await post_to_telegram(bot, article, channel)
         mark_published(conn, article["url"], article["title"])
         await asyncio.sleep(2)
 
@@ -419,7 +424,7 @@ async def run_pipeline() -> None:
             body,
             translate_to_uk=True,
         )
-        await post_to_telegram(bot, article)
+        await post_to_telegram(bot, article, channel)
         mark_published(conn, article["url"], article["title"])
         await asyncio.sleep(3)
 
