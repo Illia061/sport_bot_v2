@@ -297,11 +297,25 @@ def fetch_football_ua_article(url: str) -> dict | None:
 OF_HOME = "https://onefootball.com/en/home"
 
 async def _playwright_get(url: str, wait: int = 3000) -> str:
+    # On Railway, system chromium is installed via nixpacks.
+    # Tell Playwright to use it instead of downloading its own.
+    chromium_path = (
+        os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
+        or "/run/current-system/sw/bin/chromium"
+        or "/usr/bin/chromium"
+        or "/usr/bin/chromium-browser"
+    )
+    # Fall back to playwright's own download if system path doesn't exist
+    import shutil
+    launch_kwargs: dict = {
+        "headless": True,
+        "args": ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+    }
+    if shutil.which(chromium_path):
+        launch_kwargs["executable_path"] = chromium_path
+
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
-        )
+        browser = await pw.chromium.launch(**launch_kwargs)
         page = await browser.new_page(user_agent=HEADERS["User-Agent"])
         try:
             await page.goto(url, wait_until="networkidle", timeout=35_000)
@@ -472,8 +486,8 @@ async def run_pipeline() -> None:
     for url in new_fu:
         article = fetch_football_ua_article(url)
         if not article:
-            # mark as seen so we don't re-fetch next cycle
-            mark_published(conn, url, "")
+            # article returned None — either too old or no date found
+            # DON'T mark as published — re-check next cycle in case date appears
             continue
         article["summary"] = ai_summarise(
             article["title"], article.get("body", ""), translate_to_uk=False
@@ -491,7 +505,7 @@ async def run_pipeline() -> None:
     for url in new_of:
         article = await fetch_onefootball_article(url)
         if not article:
-            mark_published(conn, url, "")
+            # too old or skip keyword — don't save, re-check next cycle
             continue
         article["summary"] = ai_summarise(
             article["title"], article.get("body", ""), translate_to_uk=True
