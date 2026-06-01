@@ -297,22 +297,15 @@ def fetch_football_ua_article(url: str) -> dict | None:
 OF_HOME = "https://onefootball.com/en/home"
 
 async def _playwright_get(url: str, wait: int = 3000) -> str:
-    # On Railway, system chromium is installed via nixpacks.
-    # Tell Playwright to use it instead of downloading its own.
-    chromium_path = (
-        os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
-        or "/run/current-system/sw/bin/chromium"
-        or "/usr/bin/chromium"
-        or "/usr/bin/chromium-browser"
-    )
-    # Fall back to playwright's own download if system path doesn't exist
-    import shutil
+    # PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH is set in Dockerfile to /usr/bin/chromium
+    executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
+
     launch_kwargs: dict = {
         "headless": True,
         "args": ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
     }
-    if shutil.which(chromium_path):
-        launch_kwargs["executable_path"] = chromium_path
+    if executable:
+        launch_kwargs["executable_path"] = executable
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(**launch_kwargs)
