@@ -297,18 +297,11 @@ def fetch_football_ua_article(url: str) -> dict | None:
 OF_HOME = "https://onefootball.com/en/home"
 
 async def _playwright_get(url: str, wait: int = 3000) -> str:
-    # PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH is set in Dockerfile to /usr/bin/chromium
-    executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
-
-    launch_kwargs: dict = {
-        "headless": True,
-        "args": ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-    }
-    if executable:
-        launch_kwargs["executable_path"] = executable
-
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(**launch_kwargs)
+        browser = await pw.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        )
         page = await browser.new_page(user_agent=HEADERS["User-Agent"])
         try:
             await page.goto(url, wait_until="networkidle", timeout=35_000)
